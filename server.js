@@ -19,7 +19,7 @@ app.use(morgan("dev"));
 app.use(
   cors({
     origin: [
-      "http://localhost:3001",
+      "http://localhost:3000",
       "http://127.0.0.1:5500",
       "http://10.0.0.17:3000",
       process.env.FRONTEND_URL,

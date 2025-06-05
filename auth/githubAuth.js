@@ -178,7 +178,7 @@ router.get(
       });
   
       // Redirect to your existing GitHub auth route with user data in URL params
-      const frontendUrl = process.env.FRONTEND_URL;
+      const frontendUrl = process.env.FRONTEND_URL || 'http://10.0.0.17:3000';
       const userData = encodeURIComponent(JSON.stringify({
         id: req.user.id,
         email: req.user.email,

@@ -21,7 +21,7 @@ app.use(
     origin: [
       "http://localhost:3001",
       "http://127.0.0.1:5500",
-      "http://10.0.0.17:3001",
+      "http://10.0.0.17:3000",
       process.env.FRONTEND_URL,
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
@@ -115,16 +115,8 @@ app.use("/auth", googleAuthRoutes);
 app.use("/auth", githubAuthRoutes);
 
 // **START SERVER FOR LOCAL + RENDER**
-const PORT = process.env.PORT || 3000;
-const localIP = Object.values(os.networkInterfaces())
-  .flat()
-  .find((iface) => iface.family === "IPv4" && !iface.internal)?.address || "localhost";
-
-const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://${localIP}:${PORT}`;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server is running at:`);
-  console.log(`🔹 Localhost: http://localhost:${PORT}`);
-  console.log(`🔹 Local Network: http://${localIP}:${PORT}`);
-  console.log(`🔹 Render: ${renderUrl}`);
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  console.log(`🚀 Server is running at: ${renderUrl}`);
 });

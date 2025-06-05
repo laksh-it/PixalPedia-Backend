@@ -27,7 +27,7 @@ const sendOTPEmail = async (email, otp, purpose) => {
         subject: `Your OTP for ${purpose}`, // Dynamic subject based on purpose
         html: `
            <div style="font-family: Arial, sans-serif; text-align: center; color: #333; padding: 30px;">
-    <h1 style="font-size: 24px; margin-bottom: 20px;">Welcome to <strong>Your Company Name</strong>!</h1>
+    <h1 style="font-size: 24px; margin-bottom: 20px;">Welcome to <strong>PixalPedia</strong>!</h1>
     
     <!-- OTP Container -->
     <div style="font-size: 32px; font-weight: bold; background-color: #eceff1; color: #000; padding: 15px; border: 1px solid #ddd; border-radius: 5px; display: inline-block; margin: 20px auto;">
@@ -38,16 +38,16 @@ const sendOTPEmail = async (email, otp, purpose) => {
     
     <!-- Logo Section -->
     <div style="margin: 30px auto;">
-        <img src="https://vrkxxjqualipkaicqorj.supabase.co/storage/v1/object/public/images/Logo%20lakshit.PNG" 
+        <img src="https://aoycxyazroftyzqlrvpo.supabase.co/storage/v1/object/public/images//logo%202.jpeg" 
             alt="Company Logo" 
             style="max-width: 150px; height: auto; border-radius: 10px;" />
     </div>
     
-    <p style="font-size: 14px; color: #666;">We appreciate your trust in <strong>Your Company Name</strong>. If you have any questions, feel free to contact us.</p>
+    <p style="font-size: 14px; color: #666;">We appreciate your trust in <strong>PixalPedia</strong>. If you have any questions, feel free to contact us.</p>
     
     <!-- Footer -->
     <div style="font-size: 12px; color: #999; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 10px;">
-        <p style="margin: 0;">[Your Company Name] | Contact: info@yourcompany.com</p>
+        <p style="margin: 0;">PixalPedia | Contact: pediapixal@gmail.com</p>
         <p style="margin: 0;">If you didn’t request this, please ignore this email.</p>
     </div>
 </div>

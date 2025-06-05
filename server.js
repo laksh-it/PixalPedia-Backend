@@ -115,7 +115,8 @@ app.use("/auth", googleAuthRoutes);
 app.use("/auth", githubAuthRoutes);
 
 // **START SERVER FOR LOCAL + RENDER**
-const PORT = process.env.PORT || 3001;
+// Start the HTTP server instead of app.listen
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   console.log(`🚀 Server is running at: ${renderUrl}`);

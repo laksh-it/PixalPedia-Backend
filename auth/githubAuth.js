@@ -171,10 +171,12 @@ router.get(
       res.cookie('auth_token', authToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
+        sameSite: 'None'
       });
       res.cookie('session_token', sessionToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
+        sameSite: 'None'
       });
   
       // Redirect to your existing GitHub auth route with user data in URL params

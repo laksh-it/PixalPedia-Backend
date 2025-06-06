@@ -420,15 +420,18 @@ const login = async (req, res) => {
       return res.status(500).json({ error: 'Login failed due to session creation error. Please try again.' });
     }
 
-    // Set HTTP-only cookies for tokens.
-    res.cookie('auth_token', publicAuthToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production'
-    });
-    res.cookie('session_token', sessionToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production'
-    });
+    // Set HTTP-only cookies for tokens with cross-site compatibility
+res.cookie('auth_token', publicAuthToken, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production', // Ensure HTTPS in production
+  sameSite: 'None' // Allows cross-site cookie sharing
+});
+res.cookie('session_token', sessionToken, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'None'
+});
+
 
     // Return successful login response.
     return res.status(200).json({

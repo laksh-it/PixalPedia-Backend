@@ -188,7 +188,7 @@ router.get(
   
       // Redirect to frontend Google auth callback route with user data
         // Add this right before creating userData
-      const frontendUrl = process.env.FRONTEND_URL || 'http://10.0.0.17:3000';
+      const frontendUrl = process.env.FRONTEND_URL || 'http://172.20.10.2:3001';
       const userData = encodeURIComponent(JSON.stringify({
         id: req.user.id,
         email: req.user.email,

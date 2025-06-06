@@ -11,6 +11,7 @@ require('./Middleware/Keep_awake');
 const authAndRateLimiterMiddleware = require("./Middleware/Middleware");
 
 const app = express();
+const server = app;
 
 // Global middleware that applies to all requests
 app.use(express.json());
@@ -19,10 +20,7 @@ app.use(morgan("dev"));
 app.use(
   cors({
     origin: [
-      "http://localhost:3000",
-      "http://127.0.0.1:5500",
-      "http://10.0.0.17:3000",
-      process.env.FRONTEND_URL,
+      "http://localhost:3001",
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization", "login", "ts", "x-user-id", "authentication"],
@@ -114,9 +112,9 @@ app.use(passport.initialize());
 app.use("/auth", googleAuthRoutes);
 app.use("/auth", githubAuthRoutes);
 
-// **START SERVER FOR LOCAL + RENDER**
+// Start the HTTP server instead of app.listen
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   console.log(`🚀 Server is running at: ${renderUrl}`);
 });

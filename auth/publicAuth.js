@@ -424,12 +424,10 @@ const login = async (req, res) => {
 res.cookie('auth_token', publicAuthToken, {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production', // Ensure HTTPS in production
-  sameSite: 'None' // Allows cross-site cookie sharing
 });
 res.cookie('session_token', sessionToken, {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
-  sameSite: 'None'
 });
 
 

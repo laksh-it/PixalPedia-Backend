@@ -21,7 +21,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:3001",
-      "http://172.20.10.2:3001",
+      "https://pixalpedia.netlify.app",
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization", "login", "ts", "x-user-id", "authentication"],

@@ -31,14 +31,14 @@ app.use(
 
 // Define paths where the auth middleware should not be enforced.
 // Added OAuth endpoints here so that TS token checks are not applied.
-const authExceptionPathPatterns = [
-  /^\/api\/get-public-token(\/|$)/, // Matches /api/get-public-token or /api/get-public-token/something
-  /^\/auth\/google(\/|$)/,         // Matches /auth/google or /auth/google/something
-  /^\/auth\/github(\/|$)/,         // Matches /auth/github or /auth/github/something
-  /^\/auth\/google\/callback(\/|$)/, // Matches /auth/google/callback or /auth/google/callback/something
-  /^\/auth\/github\/callback(\/|$)/, // Matches /auth/github/callback or /auth/github/callback/something
-  /^\/auth\/google\/user(\/|$)/,
-  /^\/auth\/github\/user(\/|$)/
+const authExceptionPaths = [
+  '/api/get-public-token', 
+  '/auth/google',
+  '/auth/github',
+  '/auth/google/callback',
+  '/auth/github/callback',
+  '/auth/google/user',
+  '/auth/github/user'
 ];
 
 // Apply the auth middleware on all requests except the ones defined above.

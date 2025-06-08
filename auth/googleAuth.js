@@ -174,17 +174,19 @@ router.get(
         console.error('Error inserting sessions record:', sessionError);
       }
   
-      // Set tokens as HTTP-only cookies.
-      res.cookie('auth_token', authToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'None'
-      });
-      res.cookie('session_token', sessionToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'None'
-      });
+// Set tokens as HTTP-only cookies.
+console.log('Setting auth_token cookie. secure:', process.env.NODE_ENV === 'production');
+res.cookie('auth_token', authToken, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'None'
+});
+console.log('Setting session_token cookie. secure:', process.env.NODE_ENV === 'production');
+res.cookie('session_token', sessionToken, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'None'
+});
   
       // Redirect to frontend Google auth callback route with user data
         // Add this right before creating userData

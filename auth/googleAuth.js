@@ -174,18 +174,17 @@ router.get(
         console.error('Error inserting sessions record:', sessionError);
       }
   
-// Set tokens as HTTP-only cookies.
-console.log('Setting auth_token cookie. secure:', process.env.NODE_ENV === 'production');
-res.cookie('auth_token', authToken, {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'None'
+      res.cookie('auth_token', authToken, {
+       httpOnly: true,
+       secure: true, // MUST be true for production
+        sameSite: 'Lax', // You can now use Lax, which is more secure!
+       domain: '.pixalpedia.com' // <-- This makes it a first-party cookie
 });
-console.log('Setting session_token cookie. secure:', process.env.NODE_ENV === 'production');
 res.cookie('session_token', sessionToken, {
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'None'
+  secure: true, // MUST be true for production
+  sameSite: 'Lax', // You can now use Lax, which is more secure!
+  domain: '.pixalpedia.com' // <-- This makes it a first-party cookie
 });
   
       // Redirect to frontend Google auth callback route with user data

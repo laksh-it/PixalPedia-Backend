@@ -1,15 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
+const crypto = require('crypto'); // Already imported, good.
 
 // Import your Supabase Admin client
 const { supabaseAdmin } = require('../supabaseClient');
 
-// Helper function to decode and verify auth token
+// Helper function to decode and verify auth token (remains the same)
 const verifyAuthToken = (authToken, userId) => {
   try {
     const secret = process.env.USER_TOKEN_SECRET;
     if (!secret) {
+      console.error('USER_TOKEN_SECRET is not set.');
       return false;
     }
 
@@ -18,6 +19,7 @@ const verifyAuthToken = (authToken, userId) => {
     const suffixLength = 16;
     
     if (authToken.length <= prefixLength + suffixLength) {
+      console.warn('Auth token too short for verification.');
       return false;
     }
 
@@ -41,48 +43,50 @@ const verifyAuthToken = (authToken, userId) => {
 
 /**
  * GET /api/vailed
- * 
+ *
  * Verifies user login status by checking:
- * 1. Auth token from cookie against manage_logins table
- * 2. Session token from cookie against sessions table
+ * 1. Auth token from Authorization: Bearer header
+ * 2. Session token from X-Session-Token header
  * 3. User ID from x-user-id header
- * 
- * Returns: { valid: true } if all checks pass, else { valid: false }
+ *
+ * Returns: { valid: true } if all checks pass (200 OK),
+ * { valid: false, message: "..." } with 401 Unauthorized if checks fail.
  */
 router.get('/vailed', async (req, res) => {
+  // --- Set Cache-Control headers to prevent caching and force 200/401 responses ---
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  // --- End Cache-Control ---
+
   try {
     // Extract user ID from headers
     const userId = req.headers['x-user-id'];
-    
+
     if (!userId) {
-      return res.status(200).json({ valid: false });
+      console.warn('Validation failed: x-user-id header missing.');
+      return res.status(401).json({ valid: false, message: 'User ID missing.' });
     }
 
-    // Extract tokens from cookies
-    const cookies = req.headers.cookie;
-    if (!cookies) {
-      return res.status(200).json({ valid: false });
+    // --- Extract tokens from HEADERS instead of cookies ---
+    const authHeader = req.headers['authorization'];
+    const sessionToken = req.headers['x-session-token']; // Assuming your frontend sends this header
+
+    let authToken = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      authToken = authHeader.slice(7); // Remove 'Bearer ' prefix
     }
-
-    // Parse cookies to get auth_token and session_token
-    const cookieMap = {};
-    cookies.split(';').forEach(cookie => {
-      const [key, value] = cookie.trim().split('=');
-      if (key && value) {
-        cookieMap[key] = decodeURIComponent(value);
-      }
-    });
-
-    const authToken = cookieMap.auth_token;
-    const sessionToken = cookieMap.session_token;
 
     if (!authToken || !sessionToken) {
-      return res.status(200).json({ valid: false });
+      console.warn('Validation failed: Auth or session token missing from headers.');
+      return res.status(401).json({ valid: false, message: 'Authentication tokens missing.' });
     }
+    // --- End header extraction ---
 
     // Verify auth token format matches user ID
     if (!verifyAuthToken(authToken, userId)) {
-      return res.status(200).json({ valid: false });
+      console.warn('Validation failed: Auth token verification failed.');
+      return res.status(401).json({ valid: false, message: 'Invalid authentication token.' });
     }
 
     // Check manage_logins table for valid auth token and login status
@@ -95,34 +99,39 @@ router.get('/vailed', async (req, res) => {
       .single();
 
     if (loginError || !loginData) {
-      return res.status(200).json({ valid: false });
+      console.warn('Validation failed: Login record not found or not active.', loginError);
+      return res.status(401).json({ valid: false, message: 'Login session not found or inactive.' });
     }
 
     // Check if token has expired
     const now = new Date();
     const expiresAt = new Date(loginData.expires_at);
     if (now > expiresAt) {
-      return res.status(200).json({ valid: false });
+      console.warn('Validation failed: Auth token expired.');
+      // Optionally update is_logged_in to false here if you want to revoke on expiration
+      return res.status(401).json({ valid: false, message: 'Authentication token expired.' });
     }
 
     // Check sessions table for valid session token
     const { data: sessionData, error: sessionError } = await supabaseAdmin
       .from('sessions')
-      .select('id')
+      .select('id') // Just need to confirm existence
       .eq('session_id', loginData.session_id)
       .eq('session_token', sessionToken)
       .single();
 
     if (sessionError || !sessionData) {
-      return res.status(200).json({ valid: false });
+      console.warn('Validation failed: Session record not found.', sessionError);
+      return res.status(401).json({ valid: false, message: 'Invalid session record.' });
     }
 
     // All checks passed
-    return res.status(200).json({ valid: true });
+    return res.status(200).json({ valid: true, message: "Session is valid." });
 
   } catch (error) {
     console.error('Error validating user login:', error);
-    return res.status(200).json({ valid: false });
+    // For unexpected server errors, respond with a 500 status
+    return res.status(500).json({ valid: false, message: 'An internal server error occurred during validation.' });
   }
 });
 

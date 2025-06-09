@@ -167,18 +167,6 @@ router.get(
         console.error('Error inserting sessions record:', sessionError);
       }
   
-      // Set cookies
-      res.cookie('auth_token', authToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'None'
-      });
-      res.cookie('session_token', sessionToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'None'
-      });
-  
       // Redirect to your existing GitHub auth route with user data in URL params
       const frontendUrl = process.env.FRONTEND_URL || 'http://172.20.10.2:3001';
       const userData = encodeURIComponent(JSON.stringify({

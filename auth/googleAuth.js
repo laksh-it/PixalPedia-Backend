@@ -174,19 +174,6 @@ router.get(
         console.error('Error inserting sessions record:', sessionError);
       }
   
-      res.cookie('auth_token', authToken, {
-       httpOnly: true,
-       secure: true, // MUST be true for production
-        sameSite: 'Lax', // You can now use Lax, which is more secure!
-       domain: '.pixalpedia.com' // <-- This makes it a first-party cookie
-});
-res.cookie('session_token', sessionToken, {
-  httpOnly: true,
-  secure: true, // MUST be true for production
-  sameSite: 'Lax', // You can now use Lax, which is more secure!
-  domain: '.pixalpedia.com' // <-- This makes it a first-party cookie
-});
-  
       // Redirect to frontend Google auth callback route with user data
         // Add this right before creating userData
       const frontendUrl = process.env.FRONTEND_URL || 'http://172.20.10.2:3001';

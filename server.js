@@ -24,7 +24,7 @@ app.use(
       "https://pixalpedia.netlify.app",
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization", "login", "ts", "x-user-id", "authentication"],
+    allowedHeaders: ["Content-Type", "Authorization", "login", "ts", "x-user-id", "authentication", "X-Session-Token"],
     credentials: true,
   })
 );

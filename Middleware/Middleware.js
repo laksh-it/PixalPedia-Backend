@@ -36,28 +36,17 @@ function extractUserIdFromAuthToken(authToken) {
 // --- Placeholder DB functions ---
 // Replace these functions with actual database queries.
 async function getLoginRecord(userId, authToken) {
-  // Example: Query the manage_logins table
-  // WHERE user_id = $1, auth_token = $2, is_logged_in = true, and expires_at > NOW();
-  // In a real application, you'd fetch the login record associated with the authToken.
-  // For now, returning a mock.
   console.log(`DB Lookup: Checking login record for userId: ${userId}, authToken: ${authToken}`);
   return {
-    session_id: "sample-session-id-from-db", // Replace with actual session id from DB
-    is_logged_in: true,                      // Should be true for an active login.
+    session_id: "sample-session-id-from-db",
+    is_logged_in: true,
   };
 }
 
 async function getSessionRecord(sessionId, sessionToken) {
-  // Retrieve session details from the sessions table using both sessionId and sessionToken.
-  // In production, you would also verify the session_token from the database against the one provided.
   console.log(`DB Lookup: Checking session record for sessionId: ${sessionId}, sessionToken: ${sessionToken}`);
   return {
-    // In production, this record would also include a 'session_token' value that you'd verify.
-    // user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", // You might remove these from session record if not needed
-    // language: "en-US",
-    // platform: "MacIntel",
-    // screen_resolution: "1440x900",
-    // timezone_offset: -240,
+    // Session record data
   };
 }
 
@@ -67,57 +56,10 @@ const BLOCK_INCREMENT = 5 * 60 * 1000;  // 5 minutes in ms
 const REQUEST_LIMIT = 50;
 const TIME_WINDOW = 15 * 1000;           // 15 seconds
 
-// Assume 'pool' is your database connection pool, e.g., from 'pg' library
-// const pool = require('./db_connection'); // You'll need to define this
-
 // --- Function to record blocked IPs in the database ---
 async function recordBlockedIp(ip, route, blockStart) {
-  // Placeholder: Implement actual database interaction here if 'pool' is defined.
-  // For now, just logging and simulating a block.
   console.log(`Simulating IP ${ip} being blocked for route '${route}'`);
   let multiplier = 1;
-  // If you have a 'pool' uncomment and adjust this section for real DB interaction.
-  /*
-  try {
-    const res = await pool.query(
-      "SELECT id, request_count, block_end FROM blocked_ips WHERE ip = $1 ORDER BY created_at DESC LIMIT 1",
-      [ip]
-    );
-
-    if (res.rows.length > 0) {
-      const lastRecord = res.rows[0];
-      if (new Date(lastRecord.block_end) > new Date()) {
-        multiplier = lastRecord.request_count + 1;
-      }
-    }
-
-    const newBlockDuration = BLOCK_INCREMENT * multiplier;
-    const newBlockEnd = blockStart + newBlockDuration;
-
-    const insertQuery = `
-      INSERT INTO blocked_ips (ip, request_count, first_request, last_request, block_start, block_end, route)
-      VALUES ($1, $2, to_timestamp($3/1000.0), to_timestamp($3/1000.0), to_timestamp($4/1000.0), to_timestamp($5/1000.0), $6)
-    `;
-    await pool.query(insertQuery, [
-      ip,
-      multiplier,
-      blockStart,
-      blockStart,
-      newBlockEnd,
-      route,
-    ]);
-
-    console.log(
-      `IP ${ip} blocked for route '${route}' with multiplier ${multiplier}. New block end: ${new Date(newBlockEnd).toISOString()}`
-    );
-
-    return newBlockEnd;
-  } catch (err) {
-    console.error("Error recording blocked IP:", err);
-    throw err;
-  }
-  */
-  // For simulation:
   const newBlockDuration = BLOCK_INCREMENT * multiplier;
   const newBlockEnd = blockStart + newBlockDuration;
   return newBlockEnd;
@@ -132,7 +74,6 @@ function transformImageUrls(data) {
     for (const key in data) {
       if (Object.prototype.hasOwnProperty.call(data, key)) {
         if (/image_url/i.test(key) && typeof data[key] === "string") {
-          // Replace with your actual domain/proxy path
           newData[key] = data[key].replace(
             "https://aoycxyazroftyzqlrvpo.supabase.co",
             "https://yourdomain.com/proxy-image"
@@ -145,6 +86,20 @@ function transformImageUrls(data) {
     return newData;
   }
   return data;
+}
+
+// --- List of routes that require authentication ---
+const PROTECTED_ROUTES = [
+  '/api/wallpapers',
+  '/api/user/profile',
+  '/api/user/settings',
+  '/api/user/favorites',
+  // Add more protected routes as needed
+];
+
+// --- Helper to check if route requires authentication ---
+function isProtectedRoute(url) {
+  return PROTECTED_ROUTES.some(route => url.startsWith(route));
 }
 
 // --- Combined Middleware ---
@@ -172,7 +127,7 @@ async function authAndRateLimiterMiddleware(req, res, next) {
     }
     rateLimitMap.set(ip, rateData);
 
-    // 2. TS Token Validation (remains the same as it's typically a device/session fingerprint)
+    // 2. TS Token Validation
     const tsToken = req.headers["ts"] || req.query.ts;
     if (!tsToken) {
       return res.status(400).json({ error: "Missing TS token" });
@@ -184,19 +139,34 @@ async function authAndRateLimiterMiddleware(req, res, next) {
     } catch (err) {
       return res.status(400).json({ error: "Invalid TS token" });
     }
-    // Check if the TS token is older than 20 seconds.
     if (Date.now() - tsData.generatedAt > 20 * 1000) {
-      return res.status(401).json({ error: "Expired TS token. Please refresh or re-login." }); // Changed message slightly
+      return res.status(401).json({ error: "Expired TS token. Please refresh or re-login." });
     }
 
-    // 3. Conditional Auth & Session Validation
-    // If "login" header is "false" or "authentication" header is "public", skip further auth.
+    // 3. Check if this is a protected route
+    const currentRoute = req.originalUrl || req.url;
+    const routeRequiresAuth = isProtectedRoute(currentRoute);
+
+    // 4. Conditional Auth & Session Validation
     const loginHeader = req.headers["login"];
-    const authMethod = req.headers["authentication"]; // Assuming "authentication: public" is still used for public routes
+    const authMethod = req.headers["authentication"];
+    
+    // If route doesn't require auth OR explicitly marked as public, skip auth
     if (
+      !routeRequiresAuth || 
       (loginHeader && loginHeader.toString().toLowerCase() === "false") ||
       (authMethod && authMethod.toString().toLowerCase() === "public")
     ) {
+      // But if it's a protected route and login is false, return specific error
+      if (routeRequiresAuth && loginHeader && loginHeader.toString().toLowerCase() === "false") {
+        return res.status(401).json({ 
+          error: "Authentication required", 
+          code: "LOGIN_REQUIRED",
+          message: "Please log in to access this resource"
+        });
+      }
+      
+      // For non-protected routes or public access, continue normally
       const originalJson = res.json.bind(res);
       res.json = (data) => {
         const transformedData = transformImageUrls(data);
@@ -211,15 +181,23 @@ async function authAndRateLimiterMiddleware(req, res, next) {
     const authHeader = req.headers["authorization"];
     let authToken;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      authToken = authHeader.slice(7, authHeader.length); // Remove "Bearer " prefix
+      authToken = authHeader.slice(7, authHeader.length);
     } else {
-      return res.status(401).json({ error: "Missing or malformed Authorization header (Bearer token required)." });
+      return res.status(401).json({ 
+        error: "Missing or malformed Authorization header", 
+        code: "LOGIN_REQUIRED",
+        message: "Please log in to access this resource"
+      });
     }
 
     // Get sessionToken from custom header
-    const sessionToken = req.headers["x-session-token"]; // Assuming 'X-Session-Token'
+    const sessionToken = req.headers["x-session-token"];
     if (!sessionToken) {
-      return res.status(401).json({ error: "Missing X-Session-Token header." });
+      return res.status(401).json({ 
+        error: "Missing X-Session-Token header", 
+        code: "LOGIN_REQUIRED",
+        message: "Please log in to access this resource"
+      });
     }
 
     let extractedUserId;
@@ -227,36 +205,51 @@ async function authAndRateLimiterMiddleware(req, res, next) {
       extractedUserId = extractUserIdFromAuthToken(authToken);
     } catch (err) {
       console.error("Auth token extraction error:", err.message);
-      return res.status(401).json({ error: "Invalid auth token." });
+      return res.status(401).json({ 
+        error: "Invalid auth token", 
+        code: "LOGIN_REQUIRED",
+        message: "Please log in to access this resource"
+      });
     }
 
-    // It's good practice to ensure the user ID sent in headers matches the one in the token.
+    // Check user ID match
     let providedUserId = req.headers["x-user-id"];
     if (providedUserId && providedUserId !== extractedUserId) {
       console.warn(`User ID mismatch: Header ID '${providedUserId}' vs Token ID '${extractedUserId}'`);
-      return res.status(401).json({ error: "User identification mismatch." });
+      return res.status(401).json({ 
+        error: "User identification mismatch", 
+        code: "LOGIN_REQUIRED",
+        message: "Please log in to access this resource"
+      });
     }
 
-    // Validate login status from manage_logins table using both userId and authToken
+    // Validate login status
     const loginRecord = await getLoginRecord(extractedUserId, authToken);
     if (!loginRecord || !loginRecord.is_logged_in) {
       console.warn(`Login record not found or inactive for userId: ${extractedUserId}`);
-      return res.status(401).json({ error: "Session expired or user not logged in. Please re-login." });
+      return res.status(401).json({ 
+        error: "Session expired or user not logged in", 
+        code: "LOGIN_REQUIRED",
+        message: "Please log in to access this resource"
+      });
     }
 
-    // Validate session record exists using session_id from loginRecord and the sessionToken
+    // Validate session record
     const sessionRecord = await getSessionRecord(loginRecord.session_id, sessionToken);
     if (!sessionRecord) {
       console.warn(`Session record not found for sessionId: ${loginRecord.session_id}`);
-      return res.status(401).json({ error: "Invalid session. Please re-login." });
+      return res.status(401).json({ 
+        error: "Invalid session", 
+        code: "LOGIN_REQUIRED",
+        message: "Please log in to access this resource"
+      });
     }
 
-    // Optionally attach user/session data to the request object for downstream handlers
+    // Attach user data to request
     req.userId = extractedUserId;
     req.sessionId = loginRecord.session_id;
-    // req.sessionData = sessionRecord; // If you need full session details
 
-    // Override res.json to transform image URLs.
+    // Override res.json to transform image URLs
     const originalJson = res.json.bind(res);
     res.json = (data) => {
       const transformedData = transformImageUrls(data);
@@ -266,7 +259,6 @@ async function authAndRateLimiterMiddleware(req, res, next) {
     next();
   } catch (error) {
     console.error("Middleware error:", error);
-    // Be careful not to expose too much internal error detail in production
     return res.status(500).json({ error: "Internal server error." });
   }
 }

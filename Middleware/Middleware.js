@@ -1,6 +1,6 @@
 // authAndRateLimiterMiddleware.js
 const crypto = require("crypto");
-const { supabaseAdmin } = require('./supabaseClient'); // Correctly import supabaseAdmin
+const { supabaseAdmin } = require('../supabaseClient'); // Correctly import supabaseAdmin
 
 // --- Helper: Extract userId from auth token ---
 function extractUserIdFromAuthToken(authToken) {

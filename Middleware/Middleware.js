@@ -1,4 +1,6 @@
+// authAndRateLimiterMiddleware.js
 const crypto = require("crypto");
+const { supabaseAdmin } = require('./supabaseClient'); // Correctly import supabaseAdmin
 
 // --- Helper: Extract userId from auth token ---
 function extractUserIdFromAuthToken(authToken) {
@@ -29,40 +31,25 @@ function extractUserIdFromAuthToken(authToken) {
   return userId;
 }
 
-// --- Database functions (replace with your actual DB client) ---
-// Assuming you're using something like pg, supabase, or prisma
+// --- Database functions (using Supabase Admin client) ---
 async function getLoginRecord(userId, authToken) {
   try {
-    // Replace 'db' with your actual database client
-    const query = `
-      SELECT
-        session_id,
-        is_logged_in,
-        expires_at,
-        method,
-        user_id
-      FROM public.manage_logins
-      WHERE user_id = $1
-        AND auth_token = $2
-        AND is_logged_in = true
-        AND expires_at > NOW()
-      ORDER BY created_at DESC
-      LIMIT 1
-    `;
+    const { data, error } = await supabaseAdmin
+      .from('manage_logins')
+      .select('session_id, is_logged_in, expires_at, method, user_id')
+      .eq('user_id', userId)
+      .eq('auth_token', authToken)
+      .eq('is_logged_in', true)
+      .gt('expires_at', new Date().toISOString()) // Check if expires_at is in the future
+      .order('created_at', { ascending: false })
+      .limit(1);
 
-    // Example with pg client - replace with your DB implementation
-    // const result = await db.query(query, [userId, authToken]);
-    // return result.rows[0] || null;
+    if (error) {
+      console.error("Supabase error in getLoginRecord:", error);
+      return null;
+    }
 
-    console.log(`DB Query: ${query} with params [${userId}, ${authToken}]`);
-    // Placeholder return - replace with actual query
-    return {
-      session_id: "sample-session-id-from-db",
-      is_logged_in: true,
-      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
-      method: "google",
-      user_id: userId
-    };
+    return data[0] || null; // Return the first record or null if none found
   } catch (error) {
     console.error("Database error in getLoginRecord:", error);
     return null;
@@ -71,41 +58,32 @@ async function getLoginRecord(userId, authToken) {
 
 async function getSessionRecord(sessionId, sessionToken) {
   try {
-    const query = `
-      SELECT
-        session_id,
-        session_token,
-        generated_at,
-        last_access
-      FROM public.sessions
-      WHERE session_id = $1
-        AND session_token = $2
-      LIMIT 1
-    `;
+    const { data: sessionData, error: selectError } = await supabaseAdmin
+      .from('sessions')
+      .select('session_id, session_token, generated_at, last_access')
+      .eq('session_id', sessionId)
+      .eq('session_token', sessionToken)
+      .limit(1);
 
-    // Example with pg client - replace with your DB implementation
-    // const result = await db.query(query, [sessionId, sessionToken]);
-    // const sessionRecord = result.rows[0];
+    if (selectError) {
+      console.error("Supabase select error in getSessionRecord:", selectError);
+      return null;
+    }
 
-    console.log(`DB Query: ${query} with params [${sessionId}, ${sessionToken}]`);
-
-    // Placeholder return - replace with actual query
-    const sessionRecord = {
-      session_id: sessionId,
-      session_token: sessionToken,
-      generated_at: Date.now() - 1000, // 1 second ago
-      last_access: Date.now() - 500 // 0.5 seconds ago
-    };
+    const sessionRecord = sessionData[0] || null;
 
     if (sessionRecord) {
       // Update last_access timestamp
-      const updateQuery = `
-        UPDATE public.sessions
-        SET last_access = $1
-        WHERE session_id = $2 AND session_token = $3
-      `;
-      // await db.query(updateQuery, [Date.now(), sessionId, sessionToken]);
-      console.log(`DB Update: ${updateQuery} with params [${Date.now()}, ${sessionId}, ${sessionToken}]`);
+      const { error: updateError } = await supabaseAdmin
+        .from('sessions')
+        .update({ last_access: Date.now() }) // Use Date.now() for BIGINT
+        .eq('session_id', sessionId)
+        .eq('session_token', sessionToken);
+
+      if (updateError) {
+        console.error("Supabase update error in getSessionRecord (non-critical):", updateError);
+        // This is often not critical enough to deny access if other checks passed
+      }
     }
 
     return sessionRecord;
@@ -123,8 +101,8 @@ const TIME_WINDOW = 15 * 1000;           // 15 seconds
 
 async function recordBlockedIp(ip, route, blockStart) {
   console.log(`Recording blocked IP ${ip} for route '${route}'`);
-  // You should also store this in a database table for persistence
-  let multiplier = 1;
+  // TODO: Implement persistent storage for blocked IPs (e.g., database)
+  let multiplier = 1; // You could make this dynamic based on repeated blocks
   const newBlockDuration = BLOCK_INCREMENT * multiplier;
   const newBlockEnd = blockStart + newBlockDuration;
   return newBlockEnd;
@@ -141,7 +119,7 @@ function transformImageUrls(data) {
         if (/image_url/i.test(key) && typeof data[key] === "string") {
           newData[key] = data[key].replace(
             "https://aoycxyazroftyzqlrvpo.supabase.co",
-            "https://yourdomain.com/proxy-image"
+            "https://yourdomain.com/proxy-image" // Replace with your actual proxy domain
           );
         } else {
           newData[key] = transformImageUrls(data[key]);
@@ -155,29 +133,32 @@ function transformImageUrls(data) {
 
 // --- Route Configuration ---
 const PUBLIC_ROUTES = [
-  // Existing public routes
   "/login",
   "/signup",
-  "/Forgotpassword", // Assuming this corresponds to /request-password-reset-otp or a similar endpoint
-  "/Resetpassword", // Assuming this corresponds to /reset-password-with-otp
-  "/Confirmemail",  // Assuming this corresponds to /verify-email-with-otp
-
+  "/Forgotpassword",
+  "/Resetpassword",
+  "/Confirmemail",
   // New public authentication endpoints
   "/request-password-reset-otp",
   "/reset-password-with-otp",
   "/verify-email-with-otp",
   "/resend-otp",
   "/check-username",
+  // If your frontend uses /desktop/login etc., ensure you account for that here
+  // For example, if your client paths are /desktop/login, you need to match them here.
+  // Assuming the backend receives raw paths like /login, /signup, etc.
 ];
 
 function isPublicRoute(url) {
-  return PUBLIC_ROUTES.some(route => url.startsWith(route));
+  // Normalize URL to remove query parameters before checking
+  const path = url.split('?')[0];
+  return PUBLIC_ROUTES.some(route => path.startsWith(route));
 }
 
 // --- Main Middleware ---
 async function authAndRateLimiterMiddleware(req, res, next) {
   try {
-    // 1. Rate Limiting (applies to all routes)
+    // 1. Rate Limiting (applies to all routes, always executed first)
     const ip = req.ip || req.connection.remoteAddress;
     const now = Date.now();
     let rateData = rateLimitMap.get(ip) || { firstRequestTime: now, requestCount: 0, blockUntil: 0 };
@@ -200,7 +181,7 @@ async function authAndRateLimiterMiddleware(req, res, next) {
     }
     rateLimitMap.set(ip, rateData);
 
-    // 2. TS Token Validation (applies to all routes)
+    // 2. TS Token Validation (applies to all routes, always executed after rate limiting)
     const tsToken = req.headers["ts"] || req.query.ts;
     if (!tsToken) {
       return res.status(400).json({ error: "Missing TS token" });
@@ -224,14 +205,13 @@ async function authAndRateLimiterMiddleware(req, res, next) {
     // Handle public routes - these skip full authentication but still get rate limiting and TS token check
     if (isPublicRoute(currentRoute)) {
       console.log(`Public access granted for route: ${currentRoute}`);
-
-      // Apply image URL transformation to public responses as well
+      // Apply image URL transformation for all responses, including public ones
       const originalJson = res.json.bind(res);
       res.json = (data) => {
         const transformedData = transformImageUrls(data);
         originalJson(transformedData);
       };
-      return next(); // Proceed for public routes
+      return next(); // Proceed for public routes (bypassing full auth checks)
     }
 
     // All other routes are implicitly protected and require full authentication
@@ -273,7 +253,7 @@ async function authAndRateLimiterMiddleware(req, res, next) {
       });
     }
 
-    // Check user ID consistency
+    // Check user ID consistency (optional, but good for security)
     const providedUserId = req.headers["x-user-id"];
     if (providedUserId && providedUserId !== extractedUserId) {
       console.warn(`User ID mismatch: Header ID '${providedUserId}' vs Token ID '${extractedUserId}'`);
@@ -284,10 +264,10 @@ async function authAndRateLimiterMiddleware(req, res, next) {
       });
     }
 
-    // Validate login record against database
+    // Validate login record against database (REAL DB CHECK NOW)
     const loginRecord = await getLoginRecord(extractedUserId, authToken);
     if (!loginRecord || !loginRecord.is_logged_in) {
-      console.warn(`Invalid login record for userId: ${extractedUserId}`);
+      console.warn(`Invalid or expired login record for userId: ${extractedUserId}`);
       return res.status(401).json({
         error: "Session expired or user not logged in",
         code: "LOGIN_REQUIRED",
@@ -295,9 +275,9 @@ async function authAndRateLimiterMiddleware(req, res, next) {
       });
     }
 
-    // Check token expiration
+    // Check token expiration (redundant if getLoginRecord checks it, but good as a fail-safe)
     if (new Date(loginRecord.expires_at) <= new Date()) {
-      console.warn(`Expired token for userId: ${extractedUserId}`);
+      console.warn(`Expired token for userId: ${extractedUserId} detected by direct check.`);
       return res.status(401).json({
         error: "Token expired",
         code: "LOGIN_REQUIRED",
@@ -305,7 +285,7 @@ async function authAndRateLimiterMiddleware(req, res, next) {
       });
     }
 
-    // Validate session record
+    // Validate session record (REAL DB CHECK NOW)
     const sessionRecord = await getSessionRecord(loginRecord.session_id, sessionToken);
     if (!sessionRecord) {
       console.warn(`Invalid session for sessionId: ${loginRecord.session_id}`);
@@ -323,17 +303,19 @@ async function authAndRateLimiterMiddleware(req, res, next) {
 
     console.log(`Authentication successful for user: ${extractedUserId}`);
 
-
     // Apply image URL transformation to all responses (public and protected)
+    // This is done after authentication because it modifies the response,
+    // and we only want to modify responses for requests that passed initial checks.
     const originalJson = res.json.bind(res);
     res.json = (data) => {
       const transformedData = transformImageUrls(data);
       originalJson(transformedData);
     };
 
-    next();
+    next(); // All checks passed, proceed to the actual route handler
   } catch (error) {
     console.error("Middleware error:", error);
+    // Generic internal server error for unexpected issues in the middleware itself
     return res.status(500).json({ error: "Internal server error." });
   }
 }

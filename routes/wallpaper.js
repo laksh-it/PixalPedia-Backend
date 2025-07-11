@@ -17,8 +17,8 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Read the custom model URLs from the environment variables.
-const CUSTOM_CLASSIFY_MODEL_URL = process.env.CUSTOM_CLASSIFY_MODEL_URL; // Add this for classification
-const CUSTOM_MODERATE_MODEL_URL = process.env.CUSTOM_MODERATE_MODEL_URL; // Add this for moderation
+const CUSTOM_CLASSIFY_MODEL_URL = process.env.CUSTOM_CLASSIFY_MODEL_URL;
+const CUSTOM_MODERATE_MODEL_URL = process.env.CUSTOM_MODERATE_MODEL_URL;
 
 // Setup Multer for memory storage
 const storage = multer.memoryStorage();
@@ -93,16 +93,20 @@ const classifyImageWithCustomModel = async (imageBuffer, newFileName) => {
     });
     const data = response.data;
 
-    const standardizedResponse = {
-      category: data.category || null, // Ensure 'category' is used, fallback to null
-      styles: data.styles || data.expanded_styles || data.general_styles || []
-    };
+    let category = data.category || null; // Ensure 'category' is used, fallback to null
+    let rawStyles = data.styles || []; // Get the raw array of style objects
 
-    standardizedResponse.styles = Array.isArray(standardizedResponse.styles)
-      ? standardizedResponse.styles.slice(0, 5)
-      : [];
+    // --- FIX START: Extract 'label' from each style object ---
+    let styles = [];
+    if (Array.isArray(rawStyles)) {
+        styles = rawStyles
+            .map(item => typeof item.label === 'string' ? item.label : null) // Extract 'label' if it's a string, otherwise null
+            .filter(item => item !== null) // Remove any null entries
+            .slice(0, 5); // Take at most 5 styles
+    }
+    // --- FIX END ---
 
-    return standardizedResponse;
+    return { category: category, styles: styles };
   } catch (err) {
     console.error('Error during custom model classification:', err.message);
     if (err.response) {
@@ -123,17 +127,14 @@ router.post(
       .isString()
       .trim()
       .escape()
-      .notEmpty()
-      .withMessage('Title is required.')
-      .isLength({ max: 100 })
-      .withMessage('Title must not exceed 100 characters.'),
+      .notEmpty().withMessage('Title is required.')
+      .isLength({ max: 100 }).withMessage('Title must not exceed 100 characters.'),
     body('description')
       .optional({ checkFalsy: true })
       .isString()
       .trim()
       .escape()
-      .isLength({ max: 500 })
-      .withMessage('Description must not exceed 500 characters.'),
+      .isLength({ max: 500 }).withMessage('Description must not exceed 500 characters.'),
   ],
   async (req, res) => {
     try {
@@ -180,9 +181,9 @@ router.post(
       // Step 3: Classify the image using your custom model.
       const customClassifyResult = await classifyImageWithCustomModel(req.file.buffer, newFileName);
       const category = customClassifyResult.category;
-      let styles = Array.isArray(customClassifyResult.styles)
-        ? customClassifyResult.styles.slice(0, 5)
-        : [];
+      // styles is now already an array of strings thanks to the fix in classifyImageWithCustomModel
+      const styles = customClassifyResult.styles;
+
       if (!category) {
         console.warn('No category returned from custom model, marking for manual approval.');
         status = 'manual_approval'; // If classification fails, also send for manual approval
@@ -237,6 +238,7 @@ router.post(
         // Process styles.
         if (styles && styles.length > 0) {
           for (const styleName of styles) {
+            // styleName is now guaranteed to be a string here due to the fix in classifyImageWithCustomModel
             const standardizedStyle = styleName.toLowerCase().trim();
             const { data: styleData, error: styleError } = await supabaseAdmin
               .from('styles')

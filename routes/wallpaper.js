@@ -1,5 +1,3 @@
-// wallpaper.js
-
 const express = require('express');
 const multer = require('multer');
 const axios = require('axios');
@@ -17,7 +15,10 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Read the custom model URL from the environment variables.
+// THIS IS THE BASE URL OF YOUR FLASK CLIP APP (e.g., https://your-clip-space.hf.space)
+// The endpoints will be CUSTOM_MODEL_URL + "/classify" and CUSTOM_MODEL_URL + "/moderate"
 const CUSTOM_MODEL_URL = process.env.CUSTOM_MODEL_URL;
+
 
 // Setup Multer for memory storage
 const storage = multer.memoryStorage();
@@ -45,82 +46,91 @@ const uploadImageToSupabase = async (buffer, newFileName) => {
   }
 };
 
-// Helper Function: Analyze image with Microsoft Azure Cognitive Services for approval.
-const analyzeImageWithAzure = async (imageBuffer) => {
-  const AZURE_ENDPOINT = process.env.AZURE_ENDPOINT; // e.g., "https://<your-resource-name>.cognitiveservices.azure.com/"
-  const AZURE_SUBSCRIPTION_KEY = process.env.AZURE_SUBSCRIPTION_KEY;
-  const analyzeUrl = `${AZURE_ENDPOINT}/vision/v3.2/analyze?visualFeatures=Adult`;
-  try {
-    const response = await axios({
-      method: 'post',
-      url: analyzeUrl,
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Ocp-Apim-Subscription-Key': AZURE_SUBSCRIPTION_KEY
-      },
-      data: imageBuffer
-    });
-    const result = response.data;
-    const adult = result.adult;
-    if (adult && (adult.isAdultContent || adult.isRacyContent)) {
-      return { approved: false, reason: "Image flagged as adult or racy content." };
-    }
-    return { approved: true };
-  } catch (err) {
-    let reason = "Azure analysis error.";
-    if (err.response && err.response.status === 429) {
-      console.error('Azure free tier limit reached. Marking image for manual approval.');
-      reason = "Azure free tier limit reached.";
-    } else {
-      console.error('Azure analysis error:', err.message);
-    }
-    return { approved: false, reason };
-  }
-};
+// Helper Function: Classify AND Moderate the image using your custom CLIP model.
+const classifyAndModerateImageWithClip = async (imageBuffer, newFileName) => {
+  const defaultResponse = { category: null, styles: [], approved: false, reason: "Model not configured or encountered error." };
 
-// Helper Function: Classify the image using your custom model.
-// Expected response format:
-// {"category":"vintage","styles":["modern","minimalist","retro","grunge","abstract"]}
-const classifyImageWithCustomModel = async (imageBuffer, newFileName) => {
   try {
+    if (!CUSTOM_MODEL_URL) {
+      console.warn('CUSTOM_MODEL_URL is not set. Skipping CLIP classification and moderation.');
+      return { ...defaultResponse, reason: "CLIP model URL not set." };
+    }
+
+    // Prepare FormData for both calls
     const form = new FormData();
     form.append('image', imageBuffer, { filename: newFileName });
-    const response = await axios.post(CUSTOM_MODEL_URL, form, {
-      headers: { ...form.getHeaders() }
-    });
-    const data = response.data;
 
-    // Normalize the response to handle both response formats:
-    // Example response:
-    // {
-    //   "category": "Spirituality",
-    //   "score": 31.123933792114258,
-    //   "stage": "extended",
-    //   "styles": ["Spirituality", "God", "Festivals", "Poetry", "Animation"]
-    // }
-    // or:
-    // {
-    //   "category": "Visual & Digital Arts",
-    //   "score": 31.867918014526367,
-    //   "stage": "general",
-    //   "styles": ["Nature Photography", "Environment", "Sustainability", "Conceptual Art", "Spirituality"]
-    // }
-    const standardizedResponse = {
-      category: data.category || data.general_category,
-      styles: data.styles || data.expanded_styles || data.general_styles || []
+    // --- First, call the /classify endpoint for categories and styles ---
+    let classifyResult = {};
+    try {
+      const classifyResponse = await axios.post(`${CUSTOM_MODEL_URL}/classify`, form, {
+        headers: { ...form.getHeaders() }
+      });
+      const data = classifyResponse.data;
+      classifyResult = {
+        category: data.category || null,
+        styles: Array.isArray(data.styles) ? data.styles.slice(0, 5) : []
+      };
+      if (!classifyResult.category) {
+        console.warn('CLIP classification did not return a category.');
+      }
+    } catch (classifyErr) {
+      console.error('Error during CLIP classification:', classifyErr.message);
+      // Even if classification fails, we still want to attempt moderation
+      classifyResult = { category: null, styles: [], classification_error: `Classification error: ${classifyErr.message}` };
+    }
+
+    // --- Second, call the /moderate endpoint for content approval ---
+    let moderationResult = { approved: false, reason: "Moderation failed to run." }; // Default to not approved if moderation fails
+    try {
+      const moderateResponse = await axios.post(`${CUSTOM_MODEL_URL}/moderate`, form, {
+        headers: { ...form.getHeaders() }
+      });
+      const data = moderateResponse.data;
+
+      // --- CRITICAL FIX: Correctly interpret Flask API's moderation response ---
+      const isExplicit = data.is_explicit || false; // Get the boolean value
+      let moderationReason = "Content analysis complete.";
+      if (isExplicit) {
+          const flaggedCategories = Array.isArray(data.flagged_categories)
+              ? data.flagged_categories.map(cat => `${cat.category} (${cat.confidence.toFixed(2)}%)`).join(', ')
+              : 'Unknown explicit content';
+          moderationReason = `Flagged: ${flaggedCategories}`;
+      }
+
+      moderationResult = {
+        approved: !isExplicit, // If it's explicit, it's NOT approved
+        reason: moderationReason
+      };
+      // --- END CRITICAL FIX ---
+
+    } catch (moderateErr) {
+      console.error('Error during CLIP moderation:', moderateErr.message);
+      moderationResult = { approved: false, reason: `Moderation error: ${moderateErr.message}. Needs manual approval.` };
+    }
+
+    // Combine results
+    const combinedResult = {
+      category: classifyResult.category,
+      styles: classifyResult.styles,
+      approved: moderationResult.approved,
+      reason: moderationResult.reason
     };
 
-    // Ensure we have at most 5 styles (truncate if necessary)
-    standardizedResponse.styles = Array.isArray(standardizedResponse.styles)
-      ? standardizedResponse.styles.slice(0, 5)
-      : [];
+    // If classification failed to return a category, override approval status to manual_approval
+    if (!combinedResult.category && combinedResult.approved) {
+        combinedResult.approved = false;
+        combinedResult.reason = (combinedResult.reason ? `${combinedResult.reason}, ` : "") + "No category from CLIP. Needs manual approval.";
+    }
 
-    return standardizedResponse;
+    return combinedResult;
+
   } catch (err) {
-    console.error('Error during custom model classification:', err.message);
-    return { category: null, styles: [] };
+    console.error('Unexpected error in classifyAndModerateImageWithClip:', err.message);
+    return { ...defaultResponse, reason: `Unexpected error: ${err.message}` };
   }
 };
+
 
 // API Endpoint: Upload Wallpaper
 // Route: /api/wallpaper/add
@@ -161,12 +171,12 @@ router.post(
       }
 
       let { user_id, title, description, hashtags } = req.body;
-      
+
       // Check for hashtags array in case frontend uses field name "hashtags[]"
       if (!hashtags && req.body['hashtags[]']) {
         hashtags = req.body['hashtags[]'];
       }
-      
+
       if (!req.file) {
         return res.status(400).json({ error: 'Image file is required.' });
       }
@@ -188,22 +198,24 @@ router.post(
       // Step 1: Upload the image without compression.
       const imageUrl = await uploadImageToSupabase(req.file.buffer, newFileName);
 
-      // Step 2: Analyze the image with Azure for content approval.
-      const azureResult = await analyzeImageWithAzure(req.file.buffer);
+      // Step 2: Classify AND Moderate the image using your custom CLIP model.
+      const clipResult = await classifyAndModerateImageWithClip(req.file.buffer, newFileName);
+
+      const category = clipResult.category;
+      let styles = Array.isArray(clipResult.styles)
+        ? clipResult.styles.slice(0, 5)
+        : [];
+
       let status = 'published';
-      if (!azureResult.approved) {
+      if (!clipResult.approved) {
         status = 'manual_approval';
+        console.warn(`Image for user ${user_id} flagged for manual approval: ${clipResult.reason}`);
       }
 
-      // Step 3: Classify the image using your custom model.
-      const customClassifyResult = await classifyImageWithCustomModel(req.file.buffer, newFileName);
-      const category = customClassifyResult.category;
-      let styles = Array.isArray(customClassifyResult.styles)
-        ? customClassifyResult.styles.slice(0, 5)
-        : [];
-      if (!category) {
-        console.warn('No category returned from custom model, marking for manual approval.');
-        status = 'manual_approval';
+      // If category is missing, ensure manual approval even if moderation was fine
+      if (!category && status === 'published') {
+          status = 'manual_approval';
+          console.warn('No category returned from CLIP classification, marking for manual approval.');
       }
 
       // Decide the target table based on status.

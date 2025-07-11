@@ -1,3 +1,5 @@
+// wallpaper.js
+
 const express = require('express');
 const multer = require('multer');
 const axios = require('axios');
@@ -9,16 +11,32 @@ const { body, validationResult } = require('express-validator');
 
 const router = express.Router();
 
-// Initialize Supabase client (ensure environment variables are set)
-const SUPABASE_URL = process.env.SUPABASE_URL; // e.g., "https://your-project.supabase.co"
+// --- Environment Variable Checks ---
+// Ensure all necessary environment variables are loaded for production.
+// This is a good place to put simple checks.
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+  console.error("CRITICAL ERROR: SUPABASE_URL or SUPABASE_KEY is not set.");
+  process.exit(1); // Exit if critical env vars are missing
+}
+if (!process.env.CUSTOM_MODEL_URL) {
+  console.error("CRITICAL ERROR: CUSTOM_MODEL_URL is not set.");
+  process.exit(1);
+}
+// Note: AZURE_ENDPOINT and AZURE_SUBSCRIPTION_KEY are no longer needed
+// if Flask backend handles all moderation. Remove them from your .env if confirmed.
+
+// Initialize Supabase client
+const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession: false, // Important for server-side use
+  },
+});
 
-// Read the custom model URL from the environment variables.
-// THIS IS THE BASE URL OF YOUR FLASK CLIP APP (e.g., https://your-clip-space.hf.space)
-// The endpoints will be CUSTOM_MODEL_URL + "/classify" and CUSTOM_MODEL_URL + "/moderate"
-const CUSTOM_MODEL_URL = process.env.CUSTOM_MODEL_URL;
-
+// Define Flask Model Endpoints
+const CUSTOM_CLASSIFY_URL = `${process.env.CUSTOM_MODEL_URL}/classify`;
+const CUSTOM_MODERATE_URL = `${process.env.CUSTOM_MODEL_URL}/moderate`; // New moderation endpoint
 
 // Setup Multer for memory storage
 const storage = multer.memoryStorage();
@@ -27,7 +45,7 @@ const upload = multer({
   limits: { fileSize: 16 * 1024 * 1024 } // Allow up to 16MB files
 });
 
-// Helper Function: Upload image to Supabase Storage without compressing it.
+// Helper Function: Upload image to Supabase Storage.
 const uploadImageToSupabase = async (buffer, newFileName) => {
   try {
     const filePath = `wallpapers/${newFileName}`;
@@ -36,7 +54,7 @@ const uploadImageToSupabase = async (buffer, newFileName) => {
       .upload(filePath, buffer, { cacheControl: '3600', upsert: false });
     if (error) {
       console.error('Supabase upload error:', error.message);
-      throw new Error('Image upload failed.');
+      throw new Error('Image upload failed: ' + error.message);
     }
     const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/images/${filePath}`;
     return publicUrl;
@@ -46,88 +64,59 @@ const uploadImageToSupabase = async (buffer, newFileName) => {
   }
 };
 
-// Helper Function: Classify AND Moderate the image using your custom CLIP model.
-const classifyAndModerateImageWithClip = async (imageBuffer, newFileName) => {
-  const defaultResponse = { category: null, styles: [], approved: false, reason: "Model not configured or encountered error." };
-
+// Helper Function: Moderate the image using your custom Flask model.
+// Expected response format:
+// {"is_explicit": false, "flagged_categories": []}
+const moderateImageWithCustomModel = async (imageBuffer, newFileName) => {
   try {
-    if (!CUSTOM_MODEL_URL) {
-      console.warn('CUSTOM_MODEL_URL is not set. Skipping CLIP classification and moderation.');
-      return { ...defaultResponse, reason: "CLIP model URL not set." };
-    }
-
-    // Prepare FormData for both calls
     const form = new FormData();
-    form.append('image', imageBuffer, { filename: newFileName });
-
-    // --- First, call the /classify endpoint for categories and styles ---
-    let classifyResult = {};
-    try {
-      const classifyResponse = await axios.post(`${CUSTOM_MODEL_URL}/classify`, form, {
-        headers: { ...form.getHeaders() }
-      });
-      const data = classifyResponse.data;
-      classifyResult = {
-        category: data.category || null,
-        styles: Array.isArray(data.styles) ? data.styles.slice(0, 5) : []
-      };
-      if (!classifyResult.category) {
-        console.warn('CLIP classification did not return a category.');
-      }
-    } catch (classifyErr) {
-      console.error('Error during CLIP classification:', classifyErr.message);
-      // Even if classification fails, we still want to attempt moderation
-      classifyResult = { category: null, styles: [], classification_error: `Classification error: ${classifyErr.message}` };
-    }
-
-    // --- Second, call the /moderate endpoint for content approval ---
-    let moderationResult = { approved: false, reason: "Moderation failed to run." }; // Default to not approved if moderation fails
-    try {
-      const moderateResponse = await axios.post(`${CUSTOM_MODEL_URL}/moderate`, form, {
-        headers: { ...form.getHeaders() }
-      });
-      const data = moderateResponse.data;
-
-      // --- CRITICAL FIX: Correctly interpret Flask API's moderation response ---
-      const isExplicit = data.is_explicit || false; // Get the boolean value
-      let moderationReason = "Content analysis complete.";
-      if (isExplicit) {
-          const flaggedCategories = Array.isArray(data.flagged_categories)
-              ? data.flagged_categories.map(cat => `${cat.category} (${cat.confidence.toFixed(2)}%)`).join(', ')
-              : 'Unknown explicit content';
-          moderationReason = `Flagged: ${flaggedCategories}`;
-      }
-
-      moderationResult = {
-        approved: !isExplicit, // If it's explicit, it's NOT approved
-        reason: moderationReason
-      };
-      // --- END CRITICAL FIX ---
-
-    } catch (moderateErr) {
-      console.error('Error during CLIP moderation:', moderateErr.message);
-      moderationResult = { approved: false, reason: `Moderation error: ${moderateErr.message}. Needs manual approval.` };
-    }
-
-    // Combine results
-    const combinedResult = {
-      category: classifyResult.category,
-      styles: classifyResult.styles,
-      approved: moderationResult.approved,
-      reason: moderationResult.reason
-    };
-
-    // If classification failed to return a category, override approval status to manual_approval
-    if (!combinedResult.category && combinedResult.approved) {
-        combinedResult.approved = false;
-        combinedResult.reason = (combinedResult.reason ? `${combinedResult.reason}, ` : "") + "No category from CLIP. Needs manual approval.";
-    }
-
-    return combinedResult;
-
+    form.append('image', imageBuffer, { filename: newFileName, contentType: 'image/jpeg' }); // Use appropriate content type
+    const response = await axios.post(CUSTOM_MODERATE_URL, form, {
+      headers: { ...form.getHeaders() }
+    });
+    return response.data; // Should contain is_explicit and flagged_categories
   } catch (err) {
-    console.error('Unexpected error in classifyAndModerateImageWithClip:', err.message);
-    return { ...defaultResponse, reason: `Unexpected error: ${err.message}` };
+    console.error('Error during custom model moderation:', err.message);
+    // Log more details for debugging if it's an Axios error
+    if (err.response) {
+      console.error('Moderation API Response Data:', err.response.data);
+      console.error('Moderation API Response Status:', err.response.status);
+    }
+    // If the moderation service is down or errors, we should mark for manual approval.
+    return { is_explicit: true, flagged_categories: [{ category: 'moderation_service_error', confidence: 100 }] };
+  }
+};
+
+
+// Helper Function: Classify the image using your custom model.
+// Updated to expect new Flask response format.
+// Expected response format: {"category": "...", "score": ..., "stage": "...", "styles": [{"label": "...", "score": ...}, ...]}
+const classifyImageWithCustomModel = async (imageBuffer, newFileName) => {
+  try {
+    const form = new FormData();
+    form.append('image', imageBuffer, { filename: newFileName, contentType: 'image/jpeg' }); // Use appropriate content type
+    const response = await axios.post(CUSTOM_CLASSIFY_URL, form, {
+      headers: { ...form.getHeaders() }
+    });
+    const data = response.data;
+
+    // Extract category and styles from the new structure
+    const category = data.category || null;
+    let styles = [];
+    if (Array.isArray(data.styles)) {
+      // Extract just the labels from the styles array of objects
+      styles = data.styles.map(s => s.label).slice(0, 5); // Ensure max 5 styles
+    }
+
+    return { category, styles };
+  } catch (err) {
+    console.error('Error during custom model classification:', err.message);
+    // Log more details for debugging if it's an Axios error
+    if (err.response) {
+      console.error('Classification API Response Data:', err.response.data);
+      console.error('Classification API Response Status:', err.response.status);
+    }
+    return { category: null, styles: [] }; // Return null category and empty styles on error
   }
 };
 
@@ -160,7 +149,6 @@ router.post(
       .escape()
       .isLength({ max: 500 })
       .withMessage('Description must not exceed 500 characters.'),
-    // Remove the validator for hashtags as custom logic will handle various formats.
   ],
   async (req, res) => {
     try {
@@ -172,7 +160,7 @@ router.post(
 
       let { user_id, title, description, hashtags } = req.body;
 
-      // Check for hashtags array in case frontend uses field name "hashtags[]"
+      // Handle hashtags array if sent with "hashtags[]"
       if (!hashtags && req.body['hashtags[]']) {
         hashtags = req.body['hashtags[]'];
       }
@@ -188,6 +176,7 @@ router.post(
         .eq('id', user_id)
         .single();
       if (userError || !userData) {
+        console.error('User verification failed:', userError ? userError.message : 'User not found.');
         return res.status(404).json({ error: 'User not found.' });
       }
 
@@ -195,40 +184,53 @@ router.post(
       const extension = path.extname(req.file.originalname) || '';
       const newFileName = `${user_id}-${uuidv4()}${extension}`;
 
-      // Step 1: Upload the image without compression.
-      const imageUrl = await uploadImageToSupabase(req.file.buffer, newFileName);
-
-      // Step 2: Classify AND Moderate the image using your custom CLIP model.
-      const clipResult = await classifyAndModerateImageWithClip(req.file.buffer, newFileName);
-
-      const category = clipResult.category;
-      let styles = Array.isArray(clipResult.styles)
-        ? clipResult.styles.slice(0, 5)
-        : [];
-
+      // Step 1: Moderate the image first using your custom Flask model.
+      const moderationResult = await moderateImageWithCustomModel(req.file.buffer, newFileName);
       let status = 'published';
-      if (!clipResult.approved) {
+      let moderationReason = '';
+
+      if (moderationResult.is_explicit) {
         status = 'manual_approval';
-        console.warn(`Image for user ${user_id} flagged for manual approval: ${clipResult.reason}`);
+        moderationReason = moderationResult.flagged_categories.map(fc => `${fc.category} (${fc.confidence.toFixed(2)}%)`).join(', ');
+        console.warn(`Image flagged for manual approval due to explicit content: ${moderationReason}`);
       }
 
-      // If category is missing, ensure manual approval even if moderation was fine
-      if (!category && status === 'published') {
-          status = 'manual_approval';
-          console.warn('No category returned from CLIP classification, marking for manual approval.');
+      // Step 2: Upload the image to Supabase Storage only if moderation passes (or if it's going to pending).
+      // We upload regardless of initial moderation status because manual approval needs the image.
+      const imageUrl = await uploadImageToSupabase(req.file.buffer, newFileName);
+
+      // Step 3: Classify the image using your custom Flask model.
+      const customClassifyResult = await classifyImageWithCustomModel(req.file.buffer, newFileName);
+      const category = customClassifyResult.category;
+      let styles = Array.isArray(customClassifyResult.styles)
+        ? customClassifyResult.styles.slice(0, 5) // Ensure max 5 styles
+        : [];
+
+      if (!category) {
+        console.warn('No category returned from custom model, marking for manual approval.');
+        status = 'manual_approval'; // If classification fails, also require manual approval
       }
 
       // Decide the target table based on status.
-      // If manual approval is needed, insert into 'pending_wallpapers'.
       const targetTable = status === 'manual_approval' ? 'pending_wallpapers' : 'wallpapers';
 
       // Step 4: Insert the new wallpaper record.
       const { data: wallpaperData, error: wpError } = await supabaseAdmin
         .from(targetTable)
-        .insert([{ user_id, title, description, image_url: imageUrl, status }])
+        .insert([{
+          user_id,
+          title,
+          description,
+          image_url: imageUrl,
+          status,
+          // Add a field for moderation reason if it's going to pending_wallpapers
+          moderation_reason: status === 'manual_approval' ? moderationReason : null
+        }])
         .select()
         .single();
+
       if (wpError) {
+        console.error('Error inserting wallpaper record:', wpError.message);
         return res.status(500).json({ error: 'Error inserting wallpaper: ' + wpError.message });
       }
 
@@ -244,19 +246,25 @@ router.post(
             .single();
           let catId;
           if (catError || !catData) {
+            // Category doesn't exist, insert it
             const { data: newCat, error: newCatError } = await supabaseAdmin
               .from('categories')
               .insert([{ name: standardizedCategory }])
-              .select()
+              .select('id')
               .single();
-            if (!newCatError && newCat) {
+            if (newCatError) {
+              console.error(`Error creating new category "${standardizedCategory}":`, newCatError.message);
+            } else if (newCat) {
               catId = newCat.id;
             }
           } else {
             catId = catData.id;
           }
           if (catId) {
-            await supabaseAdmin.from('wallpaper_categories').insert([{ wallpaper_id: wallpaperData.id, category_id: catId }]);
+            const { error: insertCatError } = await supabaseAdmin.from('wallpaper_categories').insert([{ wallpaper_id: wallpaperData.id, category_id: catId }]);
+            if (insertCatError) {
+              console.error(`Error linking wallpaper to category "${standardizedCategory}":`, insertCatError.message);
+            }
           }
         }
 
@@ -264,6 +272,8 @@ router.post(
         if (styles && styles.length > 0) {
           for (const styleName of styles) {
             const standardizedStyle = styleName.toLowerCase().trim();
+            if (standardizedStyle === '') continue; // Skip empty style names
+
             const { data: styleData, error: styleError } = await supabaseAdmin
               .from('styles')
               .select('id')
@@ -271,19 +281,25 @@ router.post(
               .single();
             let styleId;
             if (styleError || !styleData) {
+              // Style doesn't exist, insert it
               const { data: newStyle, error: newStyleError } = await supabaseAdmin
                 .from('styles')
                 .insert([{ name: standardizedStyle }])
-                .select()
+                .select('id')
                 .single();
-              if (!newStyleError && newStyle) {
+              if (newStyleError) {
+                console.error(`Error creating new style "${standardizedStyle}":`, newStyleError.message);
+              } else if (newStyle) {
                 styleId = newStyle.id;
               }
             } else {
               styleId = styleData.id;
             }
             if (styleId) {
-              await supabaseAdmin.from('wallpaper_styles').insert([{ wallpaper_id: wallpaperData.id, style_id: styleId }]);
+              const { error: insertStyleError } = await supabaseAdmin.from('wallpaper_styles').insert([{ wallpaper_id: wallpaperData.id, style_id: styleId }]);
+              if (insertStyleError) {
+                console.error(`Error linking wallpaper to style "${standardizedStyle}":`, insertStyleError.message);
+              }
             }
           }
         }
@@ -297,8 +313,11 @@ router.post(
           } else if (Array.isArray(hashtags)) {
             tagList = hashtags; // Use directly if it's already an array
           }
+
           for (const tag of tagList) {
             const standardizedTag = tag.toLowerCase().trim();
+            if (standardizedTag === '') continue; // Skip empty tags
+
             const { data: tagData, error: tagError } = await supabaseAdmin
               .from('hashtags')
               .select('id')
@@ -306,20 +325,24 @@ router.post(
               .single();
             let hashtagId;
             if (tagError || !tagData) {
+              // Hashtag doesn't exist, insert it
               const { data: newTag, error: newTagError } = await supabaseAdmin
                 .from('hashtags')
                 .insert([{ name: standardizedTag }])
-                .select()
+                .select('id')
                 .single();
               if (newTagError) {
-                console.error(`Error creating hashtag "${tag}":`, newTagError.message);
-                continue;
+                console.error(`Error creating hashtag "${standardizedTag}":`, newTagError.message);
+                continue; // Continue to next tag if creation fails
               }
               hashtagId = newTag.id;
             } else {
               hashtagId = tagData.id;
             }
-            await supabaseAdmin.from('wallpaper_hashtags').insert([{ wallpaper_id: wallpaperData.id, hashtag_id: hashtagId }]);
+            const { error: insertHashtagError } = await supabaseAdmin.from('wallpaper_hashtags').insert([{ wallpaper_id: wallpaperData.id, hashtag_id: hashtagId }]);
+            if (insertHashtagError) {
+              console.error(`Error linking wallpaper to hashtag "${standardizedTag}":`, insertHashtagError.message);
+            }
           }
         }
       }
@@ -327,7 +350,8 @@ router.post(
       return res.status(201).json({ message: 'Wallpaper uploaded successfully!', wallpaper: wallpaperData });
     } catch (err) {
       console.error('Error in wallpaper upload:', err.message);
-      return res.status(500).json({ error: 'Internal server error:' + err.message });
+      // More detailed error response for debugging
+      return res.status(500).json({ error: 'Internal server error: ' + err.message, stack: err.stack });
     }
   }
 );
